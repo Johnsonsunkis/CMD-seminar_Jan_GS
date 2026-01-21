@@ -56,9 +56,9 @@
 </div>
 
 <script>
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyW6zicDN56lKcYI3gRKrseSzsznjSC7asdMaCXNFuCFnIf_yVFJXMitl7-KEMs3WLg/exec";
-    // REPLACE this with your actual Spreadsheet ID (the long string in your URL)
-    const SHEET_ID = "1vR0QVLue4OuTPLoFIuDmhOSPJyFyN3pBpuipF2D7-HtBr_uKJqK8M3nTNvKILHWIZwdoQdLL4xmLK18";
+// YOUR ORIGINAL RELIABLE URLS
+    const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0QVLue4OuTPLoFIuDmhOSPJyFyN3pBpuipF2D7-HtBr_uKJqK8M3nTNvKILHWIZwdoQdLL4xmLK18/pub?gid=0&single=true&output=csv";
+    const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyW6zicDN56lKcYI3gRKrseSzsznjSC7asdMaCXNFuCFnIf_yVFJXMitl7-KEMs3WLg/exec";
 
     let participants = [];
     let locallyCheckedIn = new Set(); 
@@ -66,14 +66,9 @@ const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyW6zicDN56lKcYI3gRK
 
     async function refreshData() {
         try {
-            // Updated URL: removed "&sheet=Sheet1" to let it default to the first tab
-            const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&cb=${Date.now()}`;
-            
-            const response = await fetch(url);
-            if (!response.ok) throw new Error("Network response was not ok");
+            // Hard cache-bust to force Google to show the latest CSV update
+            const response = await fetch(CSV_URL + "&cachebust=" + new Date().getTime());
             const data = await response.text();
-            
-            // This parser is specifically designed for the Google Viz CSV format
             const rows = data.split(/\r?\n/).filter(row => row.trim() !== "").slice(1); 
             
             const tbody = document.getElementById('table-body');
@@ -82,23 +77,16 @@ const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyW6zicDN56lKcYI3gRK
             participants = [];
 
             rows.forEach(row => {
-                // Google Viz API uses a very specific "Cell","Cell","Cell" format
-                const cleanCols = row.split('","').map(c => c.replace(/"/g, '').trim());
+                const cols = row.split(',').map(c => c.replace(/^"|"$/g, '').trim());
+                if (cols.length < 3) return;
 
-                if (cleanCols.length < 3) return;
-
-                const person = { 
-                    id: cleanCols[0], 
-                    name: cleanCols[1], 
-                    combined: cleanCols[2], 
-                    status: cleanCols[3] || "" 
-                };
-                
+                const person = { id: cols[0], name: cols[1], combined: cols[2], status: cols[3] || "" };
                 participants.push(person);
 
                 const isPresentInSheet = person.status.toLowerCase() === "present";
-                let showAsPresent = isPresentInSheet;
                 
+                // --- THE ANTI-FLICKER SHIELD ---
+                let showAsPresent = isPresentInSheet;
                 if (locallyCheckedIn.has(person.id)) showAsPresent = true;
                 if (locallyReverted.has(person.id)) showAsPresent = false;
 
@@ -120,11 +108,7 @@ const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyW6zicDN56lKcYI3gRK
             document.getElementById('count-display').innerText = presentCount;
             filterTable();
         } catch (err) {
-            console.error("Fetch error:", err);
-            document.getElementById('table-body').innerHTML = `<tr><td colspan="3" style="color:red; text-align:center; padding: 20px;">
-                Error loading data.<br>
-                <small>1. Click "Share" in Sheets<br>2. Set to "Anyone with the link"</small>
-            </td></tr>`;
+            console.error("Refresh Error:", err);
         }
     }
 
@@ -133,9 +117,11 @@ const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyW6zicDN56lKcYI3gRK
         const person = participants.find(p => p.combined === scanResult);
         if (person) {
             if (person.status.toLowerCase() === "present" || locallyCheckedIn.has(person.id)) return;
+            
             locallyReverted.delete(person.id);
             locallyCheckedIn.add(person.id);
             updateRowUI(person.id, true);
+
             fetch(`${SCRIPT_URL}?id=${person.id}&action=checkin`, { method: 'GET', mode: 'no-cors' });
         }
     }
@@ -145,8 +131,7 @@ const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyW6zicDN56lKcYI3gRK
         locallyCheckedIn.delete(id);
         locallyReverted.add(id);
         updateRowUI(id, false);
-        fetch(`${SCRIPT_URL}?id=${id}&action=revert`, { method: 'GET', mode: 'no-cors' })
-            .then(() => { setTimeout(refreshData, 2000); });
+        fetch(`${SCRIPT_URL}?id=${id}&action=revert`, { method: 'GET', mode: 'no-cors' });
     }
 
     function updateRowUI(id, isPresent) {
@@ -168,8 +153,8 @@ const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyW6zicDN56lKcYI3gRK
     const html5QrcodeScanner = new Html5QrcodeScanner("reader", { fps: 15, qrbox: 250 });
     refreshData().then(() => html5QrcodeScanner.render(onScanSuccess));
     
-    // Set to 5 seconds for snappy sync on alternate device
-    setInterval(refreshData, 5000);
+    // Sync every 8 seconds
+    setInterval(refreshData, 8000);
 </script>
 </script>
 </body>
