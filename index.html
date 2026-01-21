@@ -1,29 +1,78 @@
-<script>
-    // 1. UPDATE THIS IF YOU CREATED A NEW SPREADSHEET
-    const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0QVLue4OuTPLoFIuDmhOSPJyFyN3pBpuipF2D7-HtBr_uKJqK8M3nTNvKILHWIZwdoQdLL4xmLK18/pub?gid=0&single=true&output=csv";
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Seminar Live Attendance</title>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <style>
+        :root { --green: #28a745; --red: #dc3545; --dark: #343a40; --blue: #007bff; }
+        body { font-family: system-ui, sans-serif; background: #f0f2f5; padding: 15px; margin: 0; }
+        .container { max-width: 600px; margin: auto; background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        .stats-bar { display: flex; justify-content: space-between; align-items: center; background: var(--dark); color: white; padding: 15px; border-radius: 10px; margin-bottom: 15px; }
+        .counter { font-size: 24px; font-weight: bold; }
+        #sync-status { font-size: 10px; color: #777; text-align: right; margin-bottom: 5px; height: 12px; }
+        #search-input { width: 100%; padding: 12px; margin-bottom: 15px; border: 1px solid #ddd; border-radius: 8px; font-size: 16px; box-sizing: border-box; }
+        #reader { width: 100%; border-radius: 10px; overflow: hidden; margin-bottom: 10px; border: 2px solid #ddd; background: #eee; }
+        
+        /* Last Scan Display */
+        #last-scan-display { background: #e7f3ff; border-left: 5px solid var(--blue); padding: 12px; margin: 10px 0; border-radius: 4px; font-size: 14px; font-weight: bold; color: #004085; display: none; }
+        
+        table { width: 100%; border-collapse: collapse; }
+        th { text-align: left; font-size: 12px; color: #888; padding: 10px; border-bottom: 2px solid #eee; }
+        td { padding: 12px 10px; border-bottom: 1px solid #eee; font-size: 14px; }
+        .row-present { background-color: #e8f5e9 !important; color: #2e7d32 !important; }
+        .badge { font-size: 11px; padding: 4px 8px; border-radius: 5px; background: #eee; color: #666; font-weight: bold; }
+        .row-present .badge { background: var(--green); color: white; }
+        .btn-revert { background: var(--red); color: white; border: none; border-radius: 4px; padding: 4px 8px; cursor: pointer; font-size: 11px; float: right; display: none; }
+        .row-present .btn-revert { display: inline-block; }
+        tr.hidden { display: none; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div id="sync-status">Initializing...</div>
+    <div class="stats-bar">
+        <div>Total Present</div>
+        <div class="counter" id="count-display">0</div>
+    </div>
+
+    <div id="reader"></div>
+    <div id="last-scan-display">Last Scan: <span id="last-person-name">---</span></div>
     
-    // 2. YOUR NEW ACCOUNT'S WEB APP URL
+    <input type="text" id="search-input" placeholder="Search name or ID..." onkeyup="filterTable()">
+
+    <table>
+        <thead>
+            <tr><th style="width:15%">ID</th><th>Participant</th><th style="width:30%">Status</th></tr>
+        </thead>
+        <tbody id="table-body">
+            <tr><td colspan="3" style="text-align:center;">Loading data...</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<script>
+    // 1. DATA SOURCES
+    const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vS0fplx8V3AMsNv4tGqvlD_tbh8h_OPQkdYgS9coe3XPr90Rjckk3EY7f3ZjOnyzx49gD45DoGrn7TC/pub?gid=0&single=true&output=csv";
     const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw3HUBmUFNy-g8wLiLNOLCXYbYyfn2Ly_0PitLedHpKZYX4aL2YtpmyYWy0BuRS_G2k5w/exec";
 
     let participants = [];
     let locallyCheckedIn = new Set(); 
     let locallyReverted = new Set(); 
 
-    // Pings the NEW Web App for the LIVE list of present IDs
+    // Sync status from script
     async function fastSync() {
         try {
             const response = await fetch(SCRIPT_URL + "?getLiveStatus=true");
             const presentIds = await response.json();
             document.getElementById('sync-status').innerText = "Live Sync: " + new Date().toLocaleTimeString();
             
-            // Mark items green that are in the server list
             presentIds.forEach(id => {
-                if (!locallyReverted.has(id)) {
-                    updateRowUI(id, true);
-                }
+                if (!locallyReverted.has(id)) updateRowUI(id, true);
             });
 
-            // If an ID is NOT in the server list, turn it back to grey
             participants.forEach(p => {
                 if (!presentIds.includes(p.id) && !locallyCheckedIn.has(p.id)) {
                     updateRowUI(p.id, false);
@@ -34,12 +83,18 @@
         }
     }
 
+    // Initial load and full refresh
     async function refreshData() {
         try {
-            const response = await fetch(CSV_URL + "&cb=" + Date.now());
+            const response = await fetch(CSV_URL + "&t=" + Date.now());
             const data = await response.text();
-            const rows = data.split(/\r?\n/).filter(row => row.trim() !== "").slice(1); 
             
+            if (!data.includes(",")) {
+                document.getElementById('table-body').innerHTML = "<tr><td colspan='3' style='color:red;text-align:center;'>Error: CSV not published correctly.</td></tr>";
+                return;
+            }
+
+            const rows = data.split(/\r?\n/).filter(row => row.trim() !== "").slice(1); 
             const tbody = document.getElementById('table-body');
             let presentCount = 0;
             let htmlContent = "";
@@ -71,14 +126,17 @@
             });
             tbody.innerHTML = htmlContent;
             document.getElementById('count-display').innerText = presentCount;
-        } catch (err) { console.error(err); }
+            filterTable();
+        } catch (err) { 
+            console.error(err);
+            document.getElementById('table-body').innerHTML = "<tr><td colspan='3' style='text-align:center;'>Connecting to Sheet...</td></tr>";
+        }
     }
 
     function onScanSuccess(decodedText) {
         const scanResult = decodedText.trim();
         const person = participants.find(p => p.combined === scanResult);
         if (person) {
-            // Update Last Scan Box
             const displayBox = document.getElementById('last-scan-display');
             const nameSpan = document.getElementById('last-person-name');
             if(displayBox) displayBox.style.display = "block";
@@ -126,3 +184,5 @@
         });
     };
 </script>
+</body>
+</html>
