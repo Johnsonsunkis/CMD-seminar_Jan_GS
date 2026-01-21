@@ -56,24 +56,24 @@
 </div>
 
 <script>
-const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0QVLue4OuTPLoFIuDmhOSPJyFyN3pBpuipF2D7-HtBr_uKJqK8M3nTNvKILHWIZwdoQdLL4xmLK18/pub?gid=0&single=true&output=csv";
-    const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyW6zicDN56lKcYI3gRKrseSzsznjSC7asdMaCXNFuCFnIf_yVFJXMitl7-KEMs3WLg/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyW6zicDN56lKcYI3gRKrseSzsznjSC7asdMaCXNFuCFnIf_yVFJXMitl7-KEMs3WLg/exec";
+    // REPLACE this with your actual Spreadsheet ID (the long string in your URL)
+    const SHEET_ID = "1vR0QVLue4OuTPLoFIuDmhOSPJyFyN3pBpuipF2D7-HtBr_uKJqK8M3nTNvKILHWIZwdoQdLL4xmLK18";
 
     let participants = [];
     let locallyCheckedIn = new Set(); 
-    let locallyReverted = new Set(); // NEW: The "Ignore List"
+    let locallyReverted = new Set(); 
 
-async function refreshData() {
+    async function refreshData() {
         try {
-            // 1. Swapping the 'pub' URL for the 'gviz' URL to bypass Google's 30-second cache
-            // We take your Sheet ID from the CSV_URL you provided
-            const sheetID = "1vR0QVLue4OuTPLoFIuDmhOSPJyFyN3pBpuipF2D7-HtBr_uKJqK8M3nTNvKILHWIZwdoQdLL4xmLK18";
-            const GVIZ_URL = `https://docs.google.com/spreadsheets/d/${sheetID}/gviz/tq?tqx=out:csv&tq=SELECT+A,B,C,D&cb=${Date.now()}`;
-
-            const response = await fetch(GVIZ_URL);
+            // This is the real-time endpoint
+            const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Sheet1&cb=${Date.now()}`;
+            
+            const response = await fetch(url);
+            if (!response.ok) throw new Error("Network response was not ok");
             const data = await response.text();
             
-            // 2. Cleaning up the Google Visualization CSV format (removes extra quotes)
+            // Smarter CSV parsing to handle the "Gviz" quotes
             const rows = data.split(/\r?\n/).filter(row => row.trim() !== "").slice(1); 
             
             const tbody = document.getElementById('table-body');
@@ -82,17 +82,24 @@ async function refreshData() {
             participants = [];
 
             rows.forEach(row => {
-                // Slicing to handle Google's specific CSV output format
-                const cols = row.split('","').map(c => c.replace(/"/g, '').trim());
-                if (cols.length < 3) return;
+                // This regex splits by commas but ignores commas inside quotes
+                const cols = row.match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g) || [];
+                const cleanCols = cols.map(c => c.replace(/^"|"$/g, '').trim());
 
-                const person = { id: cols[0], name: cols[1], combined: cols[2], status: cols[3] || "" };
+                if (cleanCols.length < 3) return;
+
+                const person = { 
+                    id: cleanCols[0], 
+                    name: cleanCols[1], 
+                    combined: cleanCols[2], 
+                    status: cleanCols[3] || "" 
+                };
+                
                 participants.push(person);
 
                 const isPresentInSheet = person.status.toLowerCase() === "present";
-                
-                // Logic check: Sheet status OR Local Memory
                 let showAsPresent = isPresentInSheet;
+                
                 if (locallyCheckedIn.has(person.id)) showAsPresent = true;
                 if (locallyReverted.has(person.id)) showAsPresent = false;
 
@@ -114,7 +121,8 @@ async function refreshData() {
             document.getElementById('count-display').innerText = presentCount;
             filterTable();
         } catch (err) {
-            console.error("Refresh Error:", err);
+            console.error("Fetch error:", err);
+            document.getElementById('table-body').innerHTML = `<tr><td colspan="3" style="color:red; text-align:center;">Error loading data. Check Sheet permissions.</td></tr>`;
         }
     }
 
@@ -122,7 +130,8 @@ async function refreshData() {
         const scanResult = decodedText.trim();
         const person = participants.find(p => p.combined === scanResult);
         if (person) {
-            locallyReverted.delete(person.id); // Remove from ignore list if re-scanned
+            if (person.status.toLowerCase() === "present" || locallyCheckedIn.has(person.id)) return;
+            locallyReverted.delete(person.id);
             locallyCheckedIn.add(person.id);
             updateRowUI(person.id, true);
             fetch(`${SCRIPT_URL}?id=${person.id}&action=checkin`, { method: 'GET', mode: 'no-cors' });
@@ -131,17 +140,11 @@ async function refreshData() {
 
     function revertAttendance(id) {
         if (!confirm("Undo attendance for ID: " + id + "?")) return;
-        
-        locallyCheckedIn.delete(id); // Remove from "Scanned" list
-        locallyReverted.add(id);      // Add to "Ignore Sheet" list
-        
+        locallyCheckedIn.delete(id);
+        locallyReverted.add(id);
         updateRowUI(id, false);
-
         fetch(`${SCRIPT_URL}?id=${id}&action=revert`, { method: 'GET', mode: 'no-cors' })
-            .then(() => {
-                // Wait 5 seconds after the server confirms, then refresh to see if sheet caught up
-                setTimeout(refreshData, 5000);
-            });
+            .then(() => { setTimeout(refreshData, 2000); });
     }
 
     function updateRowUI(id, isPresent) {
@@ -162,7 +165,9 @@ async function refreshData() {
 
     const html5QrcodeScanner = new Html5QrcodeScanner("reader", { fps: 15, qrbox: 250 });
     refreshData().then(() => html5QrcodeScanner.render(onScanSuccess));
-    setInterval(refreshData, 12000);
+    
+    // Set to 5 seconds for snappy sync on alternate device
+    setInterval(refreshData, 5000);
 </script>
 </script>
 </body>
