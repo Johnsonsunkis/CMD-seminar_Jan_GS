@@ -66,14 +66,14 @@ const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyW6zicDN56lKcYI3gRK
 
     async function refreshData() {
         try {
-            // This is the real-time endpoint
-            const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Sheet1&cb=${Date.now()}`;
+            // Updated URL: removed "&sheet=Sheet1" to let it default to the first tab
+            const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&cb=${Date.now()}`;
             
             const response = await fetch(url);
             if (!response.ok) throw new Error("Network response was not ok");
             const data = await response.text();
             
-            // Smarter CSV parsing to handle the "Gviz" quotes
+            // This parser is specifically designed for the Google Viz CSV format
             const rows = data.split(/\r?\n/).filter(row => row.trim() !== "").slice(1); 
             
             const tbody = document.getElementById('table-body');
@@ -82,9 +82,8 @@ const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyW6zicDN56lKcYI3gRK
             participants = [];
 
             rows.forEach(row => {
-                // This regex splits by commas but ignores commas inside quotes
-                const cols = row.match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g) || [];
-                const cleanCols = cols.map(c => c.replace(/^"|"$/g, '').trim());
+                // Google Viz API uses a very specific "Cell","Cell","Cell" format
+                const cleanCols = row.split('","').map(c => c.replace(/"/g, '').trim());
 
                 if (cleanCols.length < 3) return;
 
@@ -122,7 +121,10 @@ const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyW6zicDN56lKcYI3gRK
             filterTable();
         } catch (err) {
             console.error("Fetch error:", err);
-            document.getElementById('table-body').innerHTML = `<tr><td colspan="3" style="color:red; text-align:center;">Error loading data. Check Sheet permissions.</td></tr>`;
+            document.getElementById('table-body').innerHTML = `<tr><td colspan="3" style="color:red; text-align:center; padding: 20px;">
+                Error loading data.<br>
+                <small>1. Click "Share" in Sheets<br>2. Set to "Anyone with the link"</small>
+            </td></tr>`;
         }
     }
 
