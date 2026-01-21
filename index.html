@@ -1,9 +1,61 @@
-const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0QVLue4OuTPLoFIuDmhOSPJyFyN3pBpuipF2D7-HtBr_uKJqK8M3nTNvKILHWIZwdoQdLL4xmLK18/pub?gid=0&single=true&output=csv";
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Seminar Live Attendance</title>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <style>
+        :root { --green: #28a745; --blue: #007bff; --red: #dc3545; }
+        body { font-family: system-ui, sans-serif; background: #f0f2f5; padding: 15px; margin: 0; }
+        .container { max-width: 600px; margin: auto; background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        .stats-bar { display: flex; justify-content: space-between; align-items: center; background: #343a40; color: white; padding: 15px; border-radius: 10px; margin-bottom: 15px; }
+        .counter { font-size: 24px; font-weight: bold; }
+        #search-input { width: 100%; padding: 12px; margin-bottom: 15px; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; font-size: 16px; }
+        #reader { width: 100%; border-radius: 10px; overflow: hidden; margin-bottom: 10px; border: 2px solid #ddd; background: #eee; }
+        #scan-debug { font-size: 11px; color: #777; text-align: center; margin-bottom: 15px; height: 15px; font-family: monospace; }
+        table { width: 100%; border-collapse: collapse; }
+        th { text-align: left; font-size: 12px; color: #888; padding: 10px; border-bottom: 2px solid #eee; }
+        td { padding: 12px 10px; border-bottom: 1px solid #eee; font-size: 14px; }
+        .row-present { background-color: #e8f5e9 !important; color: #2e7d32 !important; }
+        .badge { font-size: 11px; padding: 4px 8px; border-radius: 5px; background: #eee; color: #666; font-weight: bold; }
+        .row-present .badge { background: var(--green); color: white; }
+        .btn-revert { background: var(--red); color: white; border: none; border-radius: 4px; padding: 4px 8px; cursor: pointer; font-size: 11px; float: right; display: none; }
+        .row-present .btn-revert { display: inline-block; }
+        tr.hidden { display: none; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="stats-bar">
+        <div>Total Present</div>
+        <div class="counter" id="count-display">0</div>
+    </div>
+
+    <div id="reader"></div>
+    <div id="scan-debug">Ready...</div>
+
+    <input type="text" id="search-input" placeholder="Search name or ID..." onkeyup="filterTable()">
+
+    <table>
+        <thead>
+            <tr><th style="width:15%">ID</th><th>Participant</th><th style="width:30%">Status</th></tr>
+        </thead>
+        <tbody id="table-body">
+            <tr><td colspan="3" style="text-align:center;">Syncing with Google...</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<script>
+    // --- URLs ---
+    const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0QVLue4OuTPLoFIuDmhOSPJyFyN3pBpuipF2D7-HtBr_uKJqK8M3nTNvKILHWIZwdoQdLL4xmLK18/pub?gid=0&single=true&output=csv";
     const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyW6zicDN56lKcYI3gRKrseSzsznjSC7asdMaCXNFuCFnIf_yVFJXMitl7-KEMs3WLg/exec";
 
     let participants = [];
     let locallyCheckedIn = new Set(); 
-    let locallyReverted = new Set(); // NEW: The "Ignore List"
+    let locallyReverted = new Set(); 
 
     async function refreshData() {
         try {
@@ -25,18 +77,10 @@ const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0QVLue4OuTPLo
 
                 const isPresentInSheet = person.status.toLowerCase() === "present";
                 
-                // REFINED LOGIC:
-                // 1. If we just scanned them, they are IN.
-                // 2. If we just UNDID them, they are WAIT (ignore what the sheet says for now).
-                // 3. Otherwise, use what the sheet says.
+                // Anti-Flicker Logic
                 let showAsPresent = isPresentInSheet;
-                
-                if (locallyCheckedIn.has(person.id)) {
-                    showAsPresent = true;
-                }
-                if (locallyReverted.has(person.id)) {
-                    showAsPresent = false;
-                }
+                if (locallyCheckedIn.has(person.id)) showAsPresent = true;
+                if (locallyReverted.has(person.id)) showAsPresent = false;
 
                 if (showAsPresent) presentCount++;
 
@@ -55,16 +99,23 @@ const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0QVLue4OuTPLo
             tbody.innerHTML = htmlContent;
             document.getElementById('count-display').innerText = presentCount;
             filterTable();
-        } catch (err) { console.error("Refresh Error:", err); }
+        } catch (err) {
+            console.error("Refresh Error:", err);
+        }
     }
 
     function onScanSuccess(decodedText) {
         const scanResult = decodedText.trim();
+        document.getElementById('scan-debug').innerText = "Last Scan: " + scanResult;
         const person = participants.find(p => p.combined === scanResult);
+        
         if (person) {
-            locallyReverted.delete(person.id); // Remove from ignore list if re-scanned
+            if (person.status.toLowerCase() === "present" || locallyCheckedIn.has(person.id)) return;
+            
+            locallyReverted.delete(person.id);
             locallyCheckedIn.add(person.id);
             updateRowUI(person.id, true);
+
             fetch(`${SCRIPT_URL}?id=${person.id}&action=checkin`, { method: 'GET', mode: 'no-cors' });
         }
     }
@@ -72,16 +123,12 @@ const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0QVLue4OuTPLo
     function revertAttendance(id) {
         if (!confirm("Undo attendance for ID: " + id + "?")) return;
         
-        locallyCheckedIn.delete(id); // Remove from "Scanned" list
-        locallyReverted.add(id);      // Add to "Ignore Sheet" list
-        
+        locallyCheckedIn.delete(id);
+        locallyReverted.add(id);
         updateRowUI(id, false);
 
         fetch(`${SCRIPT_URL}?id=${id}&action=revert`, { method: 'GET', mode: 'no-cors' })
-            .then(() => {
-                // Wait 5 seconds after the server confirms, then refresh to see if sheet caught up
-                setTimeout(refreshData, 5000);
-            });
+            .then(() => { setTimeout(refreshData, 3000); });
     }
 
     function updateRowUI(id, isPresent) {
@@ -100,7 +147,14 @@ const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0QVLue4OuTPLo
         });
     }
 
-    const html5QrcodeScanner = new Html5QrcodeScanner("reader", { fps: 15, qrbox: 250 });
-    refreshData().then(() => html5QrcodeScanner.render(onScanSuccess));
-    setInterval(refreshData, 12000);
+    // --- Start ---
+    try {
+        const html5QrcodeScanner = new Html5QrcodeScanner("reader", { fps: 15, qrbox: 250 });
+        refreshData().then(() => html5QrcodeScanner.render(onScanSuccess));
+        setInterval(refreshData, 12000);
+    } catch (e) {
+        alert("Scanner Initialization Error: " + e.message);
+    }
 </script>
+</body>
+</html>
