@@ -9,14 +9,18 @@
         :root { --green: #28a745; --blue: #007bff; }
         body { font-family: system-ui, sans-serif; background: #f0f2f5; padding: 15px; margin: 0; }
         .container { max-width: 600px; margin: auto; background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        
         .stats-bar { display: flex; justify-content: space-between; align-items: center; background: #343a40; color: white; padding: 15px; border-radius: 10px; margin-bottom: 20px; }
         .counter { font-size: 24px; font-weight: bold; }
+        
         #reader { width: 100%; border-radius: 10px; overflow: hidden; margin-bottom: 10px; border: 2px solid #ddd; background: #eee; }
-        #scan-debug { font-size: 11px; color: #777; text-align: center; margin-bottom: 20px; height: 15px; }
+        #scan-debug { font-size: 11px; color: #777; text-align: center; margin-bottom: 20px; height: 15px; font-family: monospace; }
+        
         table { width: 100%; border-collapse: collapse; }
         th { text-align: left; font-size: 12px; color: #888; padding: 10px; border-bottom: 2px solid #eee; }
         td { padding: 12px 10px; border-bottom: 1px solid #eee; font-size: 14px; }
-        .row-present { background-color: #e8f5e9 !important; color: #2e7d32; }
+        
+        .row-present { background-color: #e8f5e9 !important; color: #2e7d32 !important; font-weight: 500; }
         .badge { font-size: 11px; padding: 4px 8px; border-radius: 5px; background: #eee; color: #666; font-weight: bold; }
         .row-present .badge { background: var(--green); color: white; }
     </style>
@@ -25,114 +29,105 @@
 
 <div class="container">
     <div class="stats-bar">
-        <div>Total Present</div>
+        <div>Attendance Count</div>
         <div class="counter" id="count-display">0</div>
     </div>
 
     <div id="reader"></div>
-    <div id="scan-debug">Scanner ready...</div>
+    <div id="scan-debug">Ready to scan...</div>
 
     <table>
         <thead>
-            <tr><th style="width:10%">ID</th><th>Participant</th><th style="width:20%">Status</th></tr>
+            <tr><th style="width:15%">ID</th><th>Participant</th><th style="width:20%">Status</th></tr>
         </thead>
         <tbody id="table-body">
-            <tr><td colspan="3" style="text-align:center;">Connecting to Google Sheets...</td></tr>
+            <tr><td colspan="3" style="text-align:center;">Syncing with Google Sheets...</td></tr>
         </tbody>
     </table>
 </div>
 
 <script>
-const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0QVLue4OuTPLoFIuDmhOSPJyFyN3pBpuipF2D7-HtBr_uKJqK8M3nTNvKILHWIZwdoQdLL4xmLK18/pub?gid=0&single=true&output=csv";
-    const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzVI8WOuv8xLbU5ObLrAV-yojsMU96_tpz1mkO1QLuX_zGF565Ey_3vaw1UNc2KKcOO/exec";
+    // YOUR UPDATED URLS
+    const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0QVLue4OuTPLoFIuDmhOSPJyFyN3pBpuipF2D7-HtBr_uKJqK8M3nTNvKILHWIZwdoQdLL4xmLK18/pub?gid=0&single=true&output=csv";
+    const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz9jG38dhgghAzwX3NWO4XdsHnDL9icB5E9yZIpyq_plVfDQU6dmKW0iydO3sx4-Jb7/exec";
 
     let participants = [];
 
-    // 1. PULL DATA
+    // 1. PULL DATA (Refresh every 10 seconds)
     async function refreshData() {
         try {
             const response = await fetch(CSV_URL + "&cb=" + Date.now());
             const data = await response.text();
-            // Split by lines and filter out empty rows
             const rows = data.split(/\r?\n/).filter(row => row.trim() !== "").slice(1); 
             
             const tbody = document.getElementById('table-body');
             let presentCount = 0;
-            tbody.innerHTML = "";
+            let htmlContent = "";
             participants = [];
 
             rows.forEach(row => {
-                // Use a smarter split to handle commas inside quotes if necessary
                 const cols = row.split(',').map(c => c.replace(/^"|"$/g, '').trim());
                 if (cols.length < 3) return;
 
-                const person = {
-                    id: cols[0],
-                    name: cols[1],
-                    combined: cols[2],
-                    status: cols[3] || ""
-                };
-                
+                const person = { id: cols[0], name: cols[1], combined: cols[2], status: cols[3] || "" };
                 participants.push(person);
 
-                const tr = document.createElement('tr');
-                tr.id = "row-" + person.id; // Assign ID to the row for instant lookup
                 const isPresent = person.status.toLowerCase() === "present";
-                
-                if (isPresent) {
-                    tr.className = "row-present";
-                    presentCount++;
-                }
+                if (isPresent) presentCount++;
 
-                tr.innerHTML = `
-                    <td>${person.id}</td>
-                    <td>${person.name}</td>
-                    <td><span class="badge" id="badge-${person.id}">${isPresent ? "IN" : "WAIT"}</span></td>
+                htmlContent += `
+                    <tr id="row-${person.id}" class="${isPresent ? 'row-present' : ''}">
+                        <td>${person.id}</td>
+                        <td>${person.name}</td>
+                        <td><span class="badge" id="badge-${person.id}">${isPresent ? "IN" : "WAIT"}</span></td>
+                    </tr>
                 `;
-                tbody.appendChild(tr);
             });
 
+            tbody.innerHTML = htmlContent;
             document.getElementById('count-display').innerText = presentCount;
         } catch (err) {
             console.error("Refresh Error:", err);
         }
     }
 
-    // 2. PUSH DATA
+    // 2. PUSH DATA (Check-in)
     function onScanSuccess(decodedText) {
         const scanResult = decodedText.trim();
-        document.getElementById('scan-debug').innerText = "Last Scan: " + scanResult;
+        document.getElementById('scan-debug').innerText = "Scanned: " + scanResult;
 
-        // Find match
         const person = participants.find(p => p.combined === scanResult);
 
         if (person) {
-            // 1. INSTANT UI FEEDBACK (Make it green immediately)
+            // Already checked in? Skip.
+            if (person.status.toLowerCase() === "present") return;
+
+            // Step A: Immediate UI Change (Turn green locally)
             const row = document.getElementById("row-" + person.id);
             const badge = document.getElementById("badge-" + person.id);
-            if (row && !row.classList.contains('row-present')) {
-                row.classList.add('row-present');
+            if (row) {
+                row.className = "row-present";
                 badge.innerText = "IN";
-                if (navigator.vibrate) navigator.vibrate(100);
             }
 
-            // 2. TELL GOOGLE SHEETS (The background task)
-            fetch(`${SCRIPT_URL}?id=${person.id}`, { mode: 'no-cors' })
+            // Step B: Send to Google Sheets (Save permanently)
+            fetch(`${SCRIPT_URL}?id=${person.id}`, { method: 'GET', mode: 'no-cors' })
                 .then(() => {
-                    console.log("Syncing check-in for ID: " + person.id);
+                    console.log("Sent check-in for ID: " + person.id);
+                    if (navigator.vibrate) navigator.vibrate(100);
                 })
-                .catch(e => console.error("Update failed", e));
+                .catch(e => console.error("Sync Failed", e));
         }
     }
 
     // 3. STARTUP
-    const html5QrcodeScanner = new Html5QrcodeScanner("reader", { fps: 15, qrbox: 250 });
+    const html5QrcodeScanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: 250 });
     
     refreshData().then(() => {
         html5QrcodeScanner.render(onScanSuccess);
     });
 
-    // Auto-Sync every 10 seconds to catch updates from other devices
+    // Auto-Sync every 10 seconds for other devices
     setInterval(refreshData, 10000);
 </script>
 </body>
