@@ -28,3 +28,170 @@
         td { padding: 12px 10px; border-bottom: 1px solid #eee; font-size: 14px; }
         .row-present { background-color: #e8f5e9 !important; color: #2e7d32 !important; }
         .badge { font-size: 11px; padding: 4px 8px; border-radius: 5px; background: #eee; color: #666; font-weight: bold; }
+        .row-present .badge { background: var(--green); color: white; }
+        
+        /* Buttons */
+        .btn-revert { background: var(--red); color: white; border: none; border-radius: 4px; padding: 4px 8px; cursor: pointer; font-size: 11px; float: right; display: none; }
+        .row-present .btn-revert { display: inline-block; }
+        tr.hidden { display: none; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div id="sync-status">Initializing...</div>
+    <div class="stats-bar">
+        <div>Total Present</div>
+        <div class="counter" id="count-display">0</div>
+    </div>
+
+    <div id="reader"></div>
+    <div id="last-scan-display">Last Scan: <span id="last-person-name">---</span></div>
+
+    <input type="text" id="search-input" placeholder="Search name or ID..." onkeyup="filterTable()">
+
+    <table>
+        <thead>
+            <tr><th style="width:15%">ID</th><th>Participant</th><th style="width:30%">Status</th></tr>
+        </thead>
+        <tbody id="table-body">
+            <tr><td colspan="3" style="text-align:center;">Loading data...</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<script>
+    // --- URLs ---
+    const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0QVLue4OuTPLoFIuDmhOSPJyFyN3pBpuipF2D7-HtBr_uKJqK8M3nTNvKILHWIZwdoQdLL4xmLK18/pub?gid=0&single=true&output=csv";
+    const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz33lIur7_vuRhl-NxiA2-03y6GRpzMkPiCaFx7WbRKUvHM4icDSr_eBeoKQRG3z4Lq/exec";
+
+    let participants = [];
+    let locallyCheckedIn = new Set(); 
+    let locallyReverted = new Set(); 
+
+    // --- 1. FAST SYNC (Keeps all devices in sync via Web App) ---
+    async function fastSync() {
+        try {
+            const response = await fetch(SCRIPT_URL + "?getLiveStatus=true");
+            const presentIds = await response.json();
+            document.getElementById('sync-status').innerText = "Live Sync: " + new Date().toLocaleTimeString();
+            
+            // Sync status from server
+            presentIds.forEach(id => {
+                if (!locallyReverted.has(id)) updateRowUI(id, true);
+            });
+
+            // Handle reverts from other devices
+            participants.forEach(p => {
+                if (!presentIds.includes(p.id) && !locallyCheckedIn.has(p.id)) {
+                    updateRowUI(p.id, false);
+                }
+            });
+        } catch (e) { 
+            console.log("FastSync syncing...");
+        }
+    }
+
+    // --- 2. DATA LOAD (Rebuilds the table) ---
+    async function refreshData() {
+        try {
+            const response = await fetch(CSV_URL + "&cb=" + Date.now());
+            const data = await response.text();
+            const rows = data.split(/\r?\n/).filter(row => row.trim() !== "").slice(1); 
+            
+            const tbody = document.getElementById('table-body');
+            let presentCount = 0;
+            let htmlContent = "";
+            participants = [];
+
+            rows.forEach(row => {
+                const cols = row.split(',').map(c => c.replace(/^"|"$/g, '').trim());
+                if (cols.length < 3) return;
+
+                const person = { id: cols[0], name: cols[1], combined: cols[2], status: cols[3] || "" };
+                participants.push(person);
+
+                const isPresentInSheet = person.status.toLowerCase() === "present";
+                let showAsPresent = isPresentInSheet || locallyCheckedIn.has(person.id);
+                if (locallyReverted.has(person.id)) showAsPresent = false;
+
+                if (showAsPresent) presentCount++;
+
+                htmlContent += `
+                    <tr id="row-${person.id}" class="${showAsPresent ? 'row-present' : ''}">
+                        <td>${person.id}</td>
+                        <td>${person.name}</td>
+                        <td>
+                            <span class="badge" id="badge-${person.id}">${showAsPresent ? "IN" : "WAIT"}</span>
+                            <button class="btn-revert" onclick="revertAttendance('${person.id}')">Undo</button>
+                        </td>
+                    </tr>
+                `;
+            });
+            tbody.innerHTML = htmlContent;
+            document.getElementById('count-display').innerText = presentCount;
+            filterTable();
+        } catch (err) {
+            console.error("Refresh Error:", err);
+        }
+    }
+
+    // --- 3. CORE ACTIONS ---
+    function onScanSuccess(decodedText) {
+        const scanResult = decodedText.trim();
+        const person = participants.find(p => p.combined === scanResult);
+        
+        if (person) {
+            // Update "Last Scan" Box
+            const displayBox = document.getElementById('last-scan-display');
+            const nameSpan = document.getElementById('last-person-name');
+            displayBox.style.display = "block";
+            nameSpan.innerText = person.name + " (" + person.id + ")";
+
+            if (locallyCheckedIn.has(person.id)) return;
+            
+            locallyReverted.delete(person.id);
+            locallyCheckedIn.add(person.id);
+            updateRowUI(person.id, true);
+            
+            fetch(`${SCRIPT_URL}?id=${person.id}&action=checkin`, { method: 'GET', mode: 'no-cors' });
+            if (navigator.vibrate) navigator.vibrate(100);
+        }
+    }
+
+    function revertAttendance(id) {
+        if (!confirm("Undo attendance for ID: " + id + "?")) return;
+        locallyCheckedIn.delete(id);
+        locallyReverted.add(id);
+        updateRowUI(id, false);
+        fetch(`${SCRIPT_URL}?id=${id}&action=revert`, { method: 'GET', mode: 'no-cors' });
+    }
+
+    function updateRowUI(id, isPresent) {
+        const row = document.getElementById("row-" + id);
+        const badge = document.getElementById("badge-" + id);
+        if (row) row.className = isPresent ? "row-present" : "";
+        if (badge) badge.innerText = isPresent ? "IN" : "WAIT";
+    }
+
+    function filterTable() {
+        const query = document.getElementById('search-input').value.toLowerCase();
+        const rows = document.querySelectorAll('#table-body tr');
+        rows.forEach(row => {
+            const text = row.innerText.toLowerCase();
+            row.classList.toggle('hidden', !text.includes(query));
+        });
+    }
+
+    // --- 4. INITIALIZE ---
+    window.onload = function() {
+        const html5QrcodeScanner = new Html5QrcodeScanner("reader", { fps: 15, qrbox: 250 });
+        refreshData().then(() => {
+            html5QrcodeScanner.render(onScanSuccess);
+            setInterval(fastSync, 3000); // Live sync every 3 seconds
+            setInterval(refreshData, 60000); // Full list rebuild every minute
+        }).catch(e => console.error("Start Error:", e));
+    };
+</script>
+</body>
+</html>
