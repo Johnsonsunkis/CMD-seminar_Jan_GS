@@ -47,15 +47,15 @@
 </div>
 
 <script>
-    // YOUR UPDATED URLS
-    const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0QVLue4OuTPLoFIuDmhOSPJyFyN3pBpuipF2D7-HtBr_uKJqK8M3nTNvKILHWIZwdoQdLL4xmLK18/pub?gid=0&single=true&output=csv";
+   const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0QVLue4OuTPLoFIuDmhOSPJyFyN3pBpuipF2D7-HtBr_uKJqK8M3nTNvKILHWIZwdoQdLL4xmLK18/pub?gid=0&single=true&output=csv";
     const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz9jG38dhgghAzwX3NWO4XdsHnDL9icB5E9yZIpyq_plVfDQU6dmKW0iydO3sx4-Jb7/exec";
 
     let participants = [];
+    let locallyCheckedIn = new Set(); // Stores IDs scanned on THIS device
 
-    // 1. PULL DATA (Refresh every 10 seconds)
     async function refreshData() {
         try {
+            // Adding a timestamp to bust the cache
             const response = await fetch(CSV_URL + "&cb=" + Date.now());
             const data = await response.text();
             const rows = data.split(/\r?\n/).filter(row => row.trim() !== "").slice(1); 
@@ -72,14 +72,18 @@
                 const person = { id: cols[0], name: cols[1], combined: cols[2], status: cols[3] || "" };
                 participants.push(person);
 
-                const isPresent = person.status.toLowerCase() === "present";
-                if (isPresent) presentCount++;
+                // LOGIC: A person is "IN" if the Sheet says so OR if we just scanned them locally
+                const isPresentInSheet = person.status.toLowerCase() === "present";
+                const isPresentLocally = locallyCheckedIn.has(person.id);
+                const showAsPresent = isPresentInSheet || isPresentLocally;
+
+                if (showAsPresent) presentCount++;
 
                 htmlContent += `
-                    <tr id="row-${person.id}" class="${isPresent ? 'row-present' : ''}">
+                    <tr id="row-${person.id}" class="${showAsPresent ? 'row-present' : ''}">
                         <td>${person.id}</td>
                         <td>${person.name}</td>
-                        <td><span class="badge" id="badge-${person.id}">${isPresent ? "IN" : "WAIT"}</span></td>
+                        <td><span class="badge" id="badge-${person.id}">${showAsPresent ? "IN" : "WAIT"}</span></td>
                     </tr>
                 `;
             });
@@ -91,7 +95,6 @@
         }
     }
 
-    // 2. PUSH DATA (Check-in)
     function onScanSuccess(decodedText) {
         const scanResult = decodedText.trim();
         document.getElementById('scan-debug').innerText = "Scanned: " + scanResult;
@@ -99,10 +102,13 @@
         const person = participants.find(p => p.combined === scanResult);
 
         if (person) {
-            // Already checked in? Skip.
-            if (person.status.toLowerCase() === "present") return;
+            // If already marked, don't ping the server again
+            if (person.status.toLowerCase() === "present" || locallyCheckedIn.has(person.id)) return;
 
-            // Step A: Immediate UI Change (Turn green locally)
+            // 1. Save to Local Memory immediately to prevent "Flicker"
+            locallyCheckedIn.add(person.id);
+            
+            // 2. Immediate UI Update
             const row = document.getElementById("row-" + person.id);
             const badge = document.getElementById("badge-" + person.id);
             if (row) {
@@ -110,25 +116,23 @@
                 badge.innerText = "IN";
             }
 
-            // Step B: Send to Google Sheets (Save permanently)
+            // 3. Save to Google Sheets
             fetch(`${SCRIPT_URL}?id=${person.id}`, { method: 'GET', mode: 'no-cors' })
                 .then(() => {
-                    console.log("Sent check-in for ID: " + person.id);
+                    console.log("Sheet update triggered for: " + person.id);
                     if (navigator.vibrate) navigator.vibrate(100);
                 })
                 .catch(e => console.error("Sync Failed", e));
         }
     }
 
-    // 3. STARTUP
     const html5QrcodeScanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: 250 });
-    
     refreshData().then(() => {
         html5QrcodeScanner.render(onScanSuccess);
     });
 
-    // Auto-Sync every 10 seconds for other devices
-    setInterval(refreshData, 10000);
+    // We can sync slightly slower (15s) to let Google's CSV catch up
+    setInterval(refreshData, 15000);
 </script>
 </body>
 </html>
