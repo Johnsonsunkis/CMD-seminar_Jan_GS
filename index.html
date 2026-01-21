@@ -63,15 +63,17 @@ const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0QVLue4OuTPLo
     let locallyCheckedIn = new Set(); 
     let locallyReverted = new Set(); // NEW: The "Ignore List"
 
-    async function refreshData() {
+async function refreshData() {
         try {
-            // We use a double-layered cache bust (timestamp + random number)
-            // This forces Google to bypass its 30-second 'Published' cache
-            const cacheBuster = `&t=${Date.now()}&rand=${Math.random()}`;
-            const response = await fetch(CSV_URL + cacheBuster);
+            // 1. Swapping the 'pub' URL for the 'gviz' URL to bypass Google's 30-second cache
+            // We take your Sheet ID from the CSV_URL you provided
+            const sheetID = "1vR0QVLue4OuTPLoFIuDmhOSPJyFyN3pBpuipF2D7-HtBr_uKJqK8M3nTNvKILHWIZwdoQdLL4xmLK18";
+            const GVIZ_URL = `https://docs.google.com/spreadsheets/d/${sheetID}/gviz/tq?tqx=out:csv&tq=SELECT+A,B,C,D&cb=${Date.now()}`;
+
+            const response = await fetch(GVIZ_URL);
             const data = await response.text();
             
-            // Basic CSV cleaning
+            // 2. Cleaning up the Google Visualization CSV format (removes extra quotes)
             const rows = data.split(/\r?\n/).filter(row => row.trim() !== "").slice(1); 
             
             const tbody = document.getElementById('table-body');
@@ -80,7 +82,8 @@ const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0QVLue4OuTPLo
             participants = [];
 
             rows.forEach(row => {
-                const cols = row.split(',').map(c => c.replace(/^"|"$/g, '').trim());
+                // Slicing to handle Google's specific CSV output format
+                const cols = row.split('","').map(c => c.replace(/"/g, '').trim());
                 if (cols.length < 3) return;
 
                 const person = { id: cols[0], name: cols[1], combined: cols[2], status: cols[3] || "" };
@@ -88,7 +91,7 @@ const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0QVLue4OuTPLo
 
                 const isPresentInSheet = person.status.toLowerCase() === "present";
                 
-                // Keep the local memory logic for the scanning device
+                // Logic check: Sheet status OR Local Memory
                 let showAsPresent = isPresentInSheet;
                 if (locallyCheckedIn.has(person.id)) showAsPresent = true;
                 if (locallyReverted.has(person.id)) showAsPresent = false;
